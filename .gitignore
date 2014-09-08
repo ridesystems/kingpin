@@ -5,3 +5,4 @@ tester
 *.xcodeproj/project.xcworkspace
 *.xcodeproj/project.xcworkspace/xcuserdata
 Build/
+*.xcworkspace/xcuserdata

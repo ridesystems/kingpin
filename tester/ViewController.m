@@ -8,18 +8,22 @@
 
 #import "ViewController.h"
 
+#import "KPAnnotation.h"
+#import "KPGridClusteringAlgorithm.h"
+#import "KPClusteringController.h"
 #import "MyAnnotation.h"
 #import "TestAnnotation.h"
+#import "TestHelpers.h"
 
-#import "KPAnnotation.h"
-#import "KPTreeController.h"
+#import "KPGridClusteringAlgorithm_Private.h"
 
-static const int kNumberOfTestAnnotations = 20000;
+#import "Datasets.h"
 
-@interface ViewController ()
+static const int kNumberOfTestAnnotations = 100000;
 
-@property (nonatomic, strong) KPTreeController *treeController;
-@property (nonatomic, strong) KPTreeController *treeController2;
+@interface ViewController () <KPClusteringControllerDelegate, KPClusteringControllerDelegate>
+
+@property (strong, nonatomic) KPClusteringController *clusteringController;
 
 @end
 
@@ -28,18 +32,20 @@ static const int kNumberOfTestAnnotations = 20000;
 - (void)viewDidLoad {
 
     [super viewDidLoad];
-    
+
     self.mapView.delegate = self;
     
-    self.treeController = [[KPTreeController alloc] initWithMapView:self.mapView];
-    self.treeController.delegate = self;
-    self.treeController.animationOptions = UIViewAnimationOptionCurveEaseOut;
+    KPGridClusteringAlgorithm *algorithm = [KPGridClusteringAlgorithm new];
+    algorithm.annotationSize = CGSizeMake(25, 50);
+    algorithm.clusteringStrategy = KPGridClusteringAlgorithmStrategyTwoPhase;
 
-    self.treeController2 = [[KPTreeController alloc] initWithMapView:self.mapView];
-    self.treeController2.delegate = self;
-    self.treeController2.animationOptions = UIViewAnimationOptionCurveEaseOut;
+    self.clusteringController = [[KPClusteringController alloc] initWithMapView:self.mapView
+                                                 clusteringAlgorithm:algorithm];
+    self.clusteringController.delegate = self;
 
-    [self resetAnnotations:nil];
+    self.clusteringController.animationOptions = UIViewAnimationOptionCurveEaseOut;
+
+    [self.clusteringController setAnnotations:[self annotations]];
     
     self.mapView.showsUserLocation = YES;
     
@@ -62,25 +68,33 @@ static const int kNumberOfTestAnnotations = 20000;
 }
 
 - (IBAction)resetAnnotations:(id)sender {
-    [self.treeController setAnnotations:[self randomAnnotationsForCoordinate:[self sfCoord]]];
-    [self.treeController2 setAnnotations:[self randomAnnotationsForCoordinate:[self nycCoord]]];
+    [self.clusteringController setAnnotations:[self annotations]];
 }
 
 
-- (NSArray *)randomAnnotationsForCoordinate:(CLLocationCoordinate2D)coordinate {
-
+- (NSArray *)annotations {
+    // build an NYC and SF cluster
+    
     NSMutableArray *annotations = [NSMutableArray array];
     
-    for (int i = 0; i < kNumberOfTestAnnotations; i++) {
+    CLLocationCoordinate2D nycCoord = [self nycCoord];
+    CLLocationCoordinate2D sfCoord = [self sfCoord];
+    
+    for (int i=0; i< kNumberOfTestAnnotations / 2; i++) {
         
-        float latAdj = ((random() % 100) / 1000.f);
-        float lngAdj = ((random() % 100) / 1000.f);
+        float latAdj = ((random() % 1000) / 1000.f);
+        float lngAdj = ((random() % 1000) / 1000.f);
         
-        TestAnnotation *annotation = [[TestAnnotation alloc] init];
-        annotation.coordinate = CLLocationCoordinate2DMake(coordinate.latitude + latAdj,
-                                                   coordinate.longitude + lngAdj);
+        TestAnnotation *a1 = [[TestAnnotation alloc] init];
+        a1.coordinate = CLLocationCoordinate2DMake(nycCoord.latitude + latAdj, 
+                                                   nycCoord.longitude + lngAdj);
+        [annotations addObject:a1];
+        
+        TestAnnotation *a2 = [[TestAnnotation alloc] init];
+        a2.coordinate = CLLocationCoordinate2DMake(sfCoord.latitude + latAdj,
+                                                   sfCoord.longitude + lngAdj);
+        [annotations addObject:a2];
 
-        [annotations addObject:annotation];
     }
     
     return annotations;
@@ -95,54 +109,57 @@ static const int kNumberOfTestAnnotations = 20000;
 }
 
 
-#pragma mark - MKMapView
+#pragma mark - <MKMapViewDelegate>
 
 - (void)mapView:(MKMapView *)mapView regionDidChangeAnimated:(BOOL)animated {
-    [self.treeController refresh:self.animationSwitch.on];
-    [self.treeController2 refresh:self.animationSwitch.on];
+    [self.clusteringController refresh:self.animationSwitch.on];
 }
 
 - (void)mapView:(MKMapView *)mapView didSelectAnnotationView:(MKAnnotationView *)view {
-    
-    if([view.annotation isKindOfClass:[KPAnnotation class]]){
+    if ([view.annotation isKindOfClass:[KPAnnotation class]]) {
         
         KPAnnotation *cluster = (KPAnnotation *)view.annotation;
         
-        if(cluster.annotations.count > 1){
+        if (cluster.annotations.count > 1){
             [self.mapView setRegion:MKCoordinateRegionMakeWithDistance(cluster.coordinate,
                                                                        cluster.radius * 2.5f,
                                                                        cluster.radius * 2.5f)
                            animated:YES];
         }
     }
-    
-    
 }
 
-- (MKAnnotationView *)mapView:(MKMapView *)mapView viewForAnnotation:(id<MKAnnotation>)annotation {    
+- (MKAnnotationView *)mapView:(MKMapView *)mapView viewForAnnotation:(id<MKAnnotation>)annotation {
     MKPinAnnotationView *annotationView = nil;
-    
+
     if ([annotation isKindOfClass:[KPAnnotation class]]) {
-        KPAnnotation *kingpinAnnotation = (KPAnnotation *)annotation;
-        
-        if ([kingpinAnnotation isCluster]) {
+        KPAnnotation *a = (KPAnnotation *)annotation;
+
+        if ([annotation isKindOfClass:[MKUserLocation class]]){
+            return nil;
+        }
+
+        if (a.isCluster) {
             annotationView = (MKPinAnnotationView *)[mapView dequeueReusableAnnotationViewWithIdentifier:@"cluster"];
             
             if (annotationView == nil) {
-                annotationView = [[MKPinAnnotationView alloc] initWithAnnotation:kingpinAnnotation reuseIdentifier:@"cluster"];
+                annotationView = [[MKPinAnnotationView alloc] initWithAnnotation:a reuseIdentifier:@"cluster"];
             }
-            
+
             annotationView.pinColor = MKPinAnnotationColorPurple;
-        } else {
+        }
+
+        else {
             annotationView = (MKPinAnnotationView *)[mapView dequeueReusableAnnotationViewWithIdentifier:@"pin"];
-            
+
             if (annotationView == nil) {
-                annotationView = [[MKPinAnnotationView alloc] initWithAnnotation:[kingpinAnnotation.annotations anyObject] reuseIdentifier:@"pin"];
+                annotationView = [[MKPinAnnotationView alloc] initWithAnnotation:[a.annotations anyObject]
+                                                    reuseIdentifier:@"pin"];
             }
-            
+
             annotationView.pinColor = MKPinAnnotationColorRed;
         }
-        
+
         annotationView.canShowCallout = YES;
     }
 
@@ -150,15 +167,23 @@ static const int kNumberOfTestAnnotations = 20000;
         annotationView = [[MKPinAnnotationView alloc] initWithAnnotation:annotation reuseIdentifier:@"nocluster"];
         annotationView.pinColor = MKPinAnnotationColorGreen;
     }
-    
+
     return annotationView;
 }
 
-#pragma mark - KPTreeControllerDelegate
+#pragma mark - <KPClusteringControllerDelegate>
 
-- (void)treeController:(KPTreeController *)tree configureAnnotationForDisplay:(KPAnnotation *)annotation {
+- (void)clusteringController:(KPClusteringController *)clusteringController configureAnnotationForDisplay:(KPAnnotation *)annotation {
     annotation.title = [NSString stringWithFormat:@"%lu custom annotations", (unsigned long)annotation.annotations.count];
     annotation.subtitle = [NSString stringWithFormat:@"%.0f meters", annotation.radius];
+}
+
+- (BOOL)clusteringControllerShouldClusterAnnotations:(KPClusteringController *)clusteringController {
+    return YES;
+}
+
+- (void)clusteringControllerWillUpdateVisibleAnnotations:(KPClusteringController *)clusteringController {
+    NSLog(@"Clustering controller %@ will update visible annotations", clusteringController);
 }
 
 @end

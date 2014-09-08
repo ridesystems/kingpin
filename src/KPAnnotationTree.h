@@ -14,13 +14,12 @@
 // limitations under the License.
 //
 
-
-#import <CoreLocation/CoreLocation.h>
+#import <Foundation/Foundation.h>
 #import <MapKit/MapKit.h>
 
 @interface KPAnnotationTree : NSObject
 
-@property (nonatomic, readonly) NSSet *annotations;
+@property (strong, readonly, nonatomic) NSSet *annotations;
 
 - (id)initWithAnnotations:(NSArray *)annotations;
 - (NSArray *)annotationsInMapRect:(MKMapRect)rect;

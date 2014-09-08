@@ -13,168 +13,254 @@
 
 #import "TestAnnotation.h"
 
+#import "Datasets.h"
 
 @interface KPAnnotationTreeTests : XCTestCase
 @end
 
-static NSUInteger const kNumberOfTestAnnotations = 50000;
+typedef struct {
+    kp_treenode_t *node;
+    int level;
+} kp_stack_el_t;
+
 
 @implementation KPAnnotationTreeTests
 
-- (void)setUp
-{
-    [super setUp];
-    // Put setup code here. This method is called before the invocation of each test method in the class.
+- (void)testStack {
+    kp_stack_t stack = kp_stack_create(10);
+    int a = 1;
+    int b = 2;
+    int c = 3;
+
+    kp_stack_push(&stack, &a);
+    kp_stack_push(&stack, &b);
+    kp_stack_push(&stack, &c);
+
+    int *exp_c = kp_stack_pop(&stack);
+    XCTAssert(*exp_c == c);
+
+    int *exp_b = kp_stack_pop(&stack);
+    XCTAssert(*exp_b == b);
+
+    int *exp_a = kp_stack_pop(&stack);
+    XCTAssert(*exp_a == a);
 }
 
-- (void)tearDown
-{
-    // Put teardown code here. This method is called after the invocation of each test method in the class.
-    [super tearDown];
+- (void)testEmptyTree {
+    KPAnnotationTree *emptyTree = [[KPAnnotationTree alloc] initWithAnnotations:@[]];
+
+    NSArray *annotations = [emptyTree annotationsInMapRect:MKMapRectWorld];
+
+    XCTAssertTrue([annotations isKindOfClass:[NSArray class]]);
+    XCTAssertEqual(annotations.count, 0);
 }
 
-- (void)testIntegrityOfAnnotationTree
-{
-    // build an NYC and SF cluster
+- (void)testTreeWithOneAnnotation {
+    TestAnnotation *annotation = [[TestAnnotation alloc] init];
+    annotation.coordinate = CLLocationCoordinate2DMake(15, 15);
 
-    CLLocationCoordinate2D NYCoord = CLLocationCoordinate2DMake(40.77, -73.98);
-    CLLocationCoordinate2D SFCoord = CLLocationCoordinate2DMake(37.85, -122.68);
+    KPAnnotationTree *treeWithOneAnnotation = [[KPAnnotationTree alloc] initWithAnnotations:@[ annotation ]];
 
-    NSMutableArray *annotations = [NSMutableArray array];
+    NSArray *annotations = [treeWithOneAnnotation annotationsInMapRect:MKMapRectWorld];
 
-    CLLocationCoordinate2D nycCoord = NYCoord;
-    CLLocationCoordinate2D sfCoord = SFCoord;
+    TestAnnotation *annotationBySearch = [annotations firstObject];
 
-    for (int i = 0; i < kNumberOfTestAnnotations / 2; i++) {
+    XCTAssertTrue([annotationBySearch isEqual:annotation]);
+    XCTAssertTrue([annotations isKindOfClass:[NSArray class]]);
+    XCTAssertTrue(annotations.count == 1);
+}
 
-        CLLocationDegrees latAdj = ((random() % 100) / 1000.f);
-        CLLocationDegrees lngAdj = ((random() % 100) / 1000.f);
+- (void)testTreesWithVariousNumberOfEqualAnnotations {
+    NSUInteger K = 100;
+    NSUInteger N = 100;
 
-        TestAnnotation *a1 = [[TestAnnotation alloc] init];
-        a1.coordinate = CLLocationCoordinate2DMake(nycCoord.latitude + latAdj,
-                                                   nycCoord.longitude + lngAdj);
-        [annotations addObject:a1];
+    NSUInteger iterationsCount = 0;
+    for (NSUInteger i = 0; i < N; i++) {
+        for (NSUInteger j = 0; j < K; j++) {
+            iterationsCount++;
 
-        TestAnnotation *a2 = [[TestAnnotation alloc] init];
-        a2.coordinate = CLLocationCoordinate2DMake(sfCoord.latitude + latAdj,
-                                                   sfCoord.longitude + lngAdj);
-        [annotations addObject:a2];
+            NSArray *annotations = [KPTestDatasets datasetRandomWithNumberOfEqualAnnotations:i];
 
-    }
+            KPAnnotationTree *annotationTree = [[KPAnnotationTree alloc] initWithAnnotations:annotations];
 
-    KPAnnotationTree *annotationTree = [[KPAnnotationTree alloc] initWithAnnotations:annotations];
+            NSArray *annotationsBySearch = [annotationTree annotationsInMapRect:MKMapRectWorld];
 
-    NSArray *annotationsBySearch = [annotationTree annotationsInMapRect:MKMapRectWorld];
-
-    __block __weak void (^weakRecursiveTraversalBlock)(kp_treenode_t *node, NSUInteger levelOfDepth);
-    void (^recursiveTraversalBlock)(kp_treenode_t *node, NSUInteger levelOfDepth);
-
-    __block NSUInteger numberOfNodes = 0;
-
-    weakRecursiveTraversalBlock = recursiveTraversalBlock = ^(kp_treenode_t *node, NSUInteger levelOfDepth) {
-        numberOfNodes++;
-
-        NSUInteger XorY = (levelOfDepth % 2) == 0;
-
-        if (node->left) {
-            if (XorY) {
-                XCTAssertTrue(node->left->mapPoint.x < node->mapPoint.x, @"");
-            } else {
-                XCTAssertTrue(node->left->mapPoint.y < node->mapPoint.y, @"");
+            for (id <MKAnnotation> annotation in annotationsBySearch) {
+                XCTAssertTrue([annotation isKindOfClass:[TestAnnotation class]]);
+                XCTAssertTrue(CLLocationCoordinate2DIsValid([annotation coordinate]));
             }
 
-            weakRecursiveTraversalBlock(node->left, levelOfDepth + 1);
+            NSSet *annotationsBySearchSet = [NSSet setWithArray:annotationsBySearch];
+
+            XCTAssertTrue([annotationsBySearchSet isEqualToSet:annotationTree.annotations]);
+            XCTAssertTrue(annotations.count == annotations.count);
         }
-
-        if (node->right) {
-            if (XorY) {
-                XCTAssertTrue(node->mapPoint.x <= node->right->mapPoint.x, @"");
-            } else {
-                XCTAssertTrue(node->mapPoint.y <= node->right->mapPoint.y, @"");
-            }
-
-            weakRecursiveTraversalBlock(node->right, levelOfDepth + 1);
-        }
-    };
-
-    recursiveTraversalBlock(annotationTree.root, 0);
-
-    XCTAssertTrue(kNumberOfTestAnnotations == annotations.count, @"");
-    XCTAssertTrue(kNumberOfTestAnnotations == annotationsBySearch.count, @"");
-    XCTAssertTrue(kNumberOfTestAnnotations == numberOfNodes, @"");
-}
-
-- (void)testEquivalenceOfAnnotationTrees
-{
-    // build an NYC and SF cluster
-
-    CLLocationCoordinate2D NYCoord = CLLocationCoordinate2DMake(40.77, -73.98);
-    CLLocationCoordinate2D SFCoord = CLLocationCoordinate2DMake(37.85, -122.68);
-
-    NSMutableArray *annotations = [NSMutableArray array];
-
-    CLLocationCoordinate2D nycCoord = NYCoord;
-    CLLocationCoordinate2D sfCoord = SFCoord;
-
-    for (int i=0; i < kNumberOfTestAnnotations / 2; i++) {
-
-        CLLocationDegrees latAdj = ((random() % 100) / 1000.f);
-        CLLocationDegrees lngAdj = ((random() % 100) / 1000.f);
-
-        TestAnnotation *a1 = [[TestAnnotation alloc] init];
-        a1.coordinate = CLLocationCoordinate2DMake(nycCoord.latitude + latAdj,
-                                                   nycCoord.longitude + lngAdj);
-        [annotations addObject:a1];
-
-        TestAnnotation *a2 = [[TestAnnotation alloc] init];
-        a2.coordinate = CLLocationCoordinate2DMake(sfCoord.latitude + latAdj,
-                                                   sfCoord.longitude + lngAdj);
-        [annotations addObject:a2];
-
     }
 
-    // Create array of shuffled annotations and ensure integrity.
-    NSArray *shuffledAnnotations = arrayShuffle(annotations);
+    XCTAssertTrue(iterationsCount == K * N);
+}
 
-    NSAssert(annotations.count == shuffledAnnotations.count, nil);
+- (void)testTreesWithVariousNumberOfAnnotations {
+    NSUInteger K = 100;
+    NSUInteger N = 100;
 
-    NSSet *annotationSet = [NSSet setWithArray:annotations];
-    NSSet *shuffledAnnotationSet = [NSSet setWithArray:shuffledAnnotations];
+    NSUInteger iterationsCount = 0;
+    for (NSUInteger i = 0; i < N; i++) {
+        for (NSUInteger j = 0; j < K; j++) {
+            iterationsCount++;
 
-    NSAssert([annotationSet isEqual:shuffledAnnotationSet], nil);
+            NSArray *annotations = [KPTestDatasets datasetRandomWithNumberOfAnnotations:i];
+
+            KPAnnotationTree *annotationTree = [[KPAnnotationTree alloc] initWithAnnotations:annotations];
+
+            NSArray *annotationsBySearch = [annotationTree annotationsInMapRect:MKMapRectWorld];
+
+            for (id <MKAnnotation> annotation in annotationsBySearch) {
+                XCTAssertTrue([annotation isKindOfClass:[TestAnnotation class]]);
+                XCTAssertTrue(CLLocationCoordinate2DIsValid([annotation coordinate]));
+            }
+
+            NSSet *annotationsBySearchSet = [NSSet setWithArray:annotationsBySearch];
+
+            XCTAssertTrue([annotationsBySearchSet isEqualToSet:annotationTree.annotations]);
+            XCTAssertTrue(annotations.count == annotations.count);
+        }
+    }
+    
+    XCTAssertTrue(iterationsCount == K * N);
+}
+
+- (void)testIntegrityOfAnnotationTree {
+    id datasets = [KPTestDatasets datasets];
+
+    for (NSArray *annotations in datasets) {
+        NSUInteger annotationsCount = annotations.count;
+
+        NSLog(@"Annotation Count: %tu", annotationsCount);
+
+        KPAnnotationTree *annotationTree = [[KPAnnotationTree alloc] initWithAnnotations:annotations];
+
+        NSArray *annotationsBySearch = [annotationTree annotationsInMapRect:MKMapRectWorld];
+
+        XCTAssertTrue(NSArrayHasDuplicates(annotationsBySearch) == NO);
+
+        __block NSUInteger numberOfNodes = 0;
+
+        void (^traversalBlock)(kp_treenode_t *, int) = ^(kp_treenode_t *node, int level) {
+            NSUInteger XorY = (level % 2) == 0;
+
+            if (node->left) {
+                if (XorY) {
+                    XCTAssertTrue(node->left->mk_map_point.x < node->mk_map_point.x, @"");
+                } else {
+                    XCTAssertTrue(node->left->mk_map_point.y < node->mk_map_point.y, @"");
+                }
+            }
+
+            if (node->right) {
+                if (XorY) {
+                    XCTAssertTrue(node->mk_map_point.x <= node->right->mk_map_point.x, @"");
+                } else {
+                    XCTAssertTrue(node->mk_map_point.y <= node->right->mk_map_point.y, @"");
+                }
+            }
+        };
+
+        kp_stack_el_t *stack_info_storage = malloc(annotationsCount * sizeof(kp_stack_el_t));
+        kp_stack_el_t *top_snaphot;
+
+        kp_stack_t stack = kp_stack_create(annotationsCount);
+        kp_stack_push(&stack, NULL);
+
+        kp_stack_el_t *top = stack_info_storage;
+        top->node = annotationTree.tree.root;
+        top->level = 0;
+
+        while (top != NULL) {
+            numberOfNodes++;
+
+            kp_treenode_t *node = top->node;
+
+            traversalBlock(top->node, top->level);
+
+            top_snaphot = top;
+
+            if (node->right != NULL) {
+                top++;
+
+                (top)->node = node->right;
+                (top)->level = top_snaphot->level + 1;;
+
+                kp_stack_push(&stack, top);
+            }
+
+            if (node->left != NULL) {
+                top++;
+
+                (top)->node = node->left;
+                (top)->level = top_snaphot->level + 1;;
+
+                kp_stack_push(&stack, top);
+            }
+
+            top = kp_stack_pop(&stack);
+        }
+
+        NSLog(@"numberOfNodes Count: %tu", numberOfNodes);
+
+        XCTAssertTrue(annotationsCount == annotations.count, @"");
+        XCTAssertTrue(annotationsCount == annotationsBySearch.count, @"");
+        XCTAssertTrue(annotationsCount == numberOfNodes, @"");
+    }
+}
+
+- (void)testEquivalenceOfAnnotationTrees {
+    id datasets = [KPTestDatasets datasets];
+
+    for (NSArray *annotations in datasets) {
+        NSUInteger annotationsCount = annotations.count;
+
+        // Create array of shuffled annotations and ensure integrity.
+        NSArray *shuffledAnnotations = arrayShuffle(annotations);
+
+        NSAssert(annotations.count == shuffledAnnotations.count, nil);
+
+        NSSet *annotationSet = [NSSet setWithArray:annotations];
+        NSSet *shuffledAnnotationSet = [NSSet setWithArray:shuffledAnnotations];
+
+        NSAssert([annotationSet isEqual:shuffledAnnotationSet], nil);
 
 
-    // Build to two different trees based on original and shuffled annotations arrays.
-    KPAnnotationTree *annotationTree1 = [[KPAnnotationTree alloc] initWithAnnotations:annotations];
-    KPAnnotationTree *annotationTree2 = [[KPAnnotationTree alloc] initWithAnnotations:shuffledAnnotations];
+        // Build to two different trees based on original and shuffled annotations arrays.
+        KPAnnotationTree *annotationTree1 = [[KPAnnotationTree alloc] initWithAnnotations:annotations];
+        KPAnnotationTree *annotationTree2 = [[KPAnnotationTree alloc] initWithAnnotations:shuffledAnnotations];
 
-    NSArray *annotationsBySearch1 = [annotationTree1 annotationsInMapRect:MKMapRectWorld];
-    NSArray *annotationsBySearch2 = [annotationTree2 annotationsInMapRect:MKMapRectWorld];
+        NSArray *annotationsBySearch1 = [annotationTree1 annotationsInMapRect:MKMapRectWorld];
+        NSArray *annotationsBySearch2 = [annotationTree2 annotationsInMapRect:MKMapRectWorld];
 
-    NSSet *annotationSetBySearch1 = [NSSet setWithArray:annotationsBySearch1];
-    NSSet *annotationSetBySearch2 = [NSSet setWithArray:annotationsBySearch2];
+        XCTAssertTrue(NSArrayHasDuplicates(annotationsBySearch1) == NO);
+        XCTAssertTrue(NSArrayHasDuplicates(annotationsBySearch2) == NO);
 
-    XCTAssertTrue([annotationSetBySearch1 isEqual:annotationSetBySearch2], @"");
-    XCTAssertTrue([annotationSetBySearch1 isEqual:annotationSet], @"");
-    XCTAssertTrue(annotationsBySearch1.count == kNumberOfTestAnnotations, @"");
+        NSSet *annotationSetBySearch1 = [NSSet setWithArray:annotationsBySearch1];
+        NSSet *annotationSetBySearch2 = [NSSet setWithArray:annotationsBySearch2];
 
-    // Create random rect
-    double randomWidth = randomWithinRange(0, MKMapRectWorld.size.width);
-    double randomHeight = randomWithinRange(0, MKMapRectWorld.size.height);
-    double randomX = randomWithinRange(0, MKMapRectWorld.size.width - randomWidth);
-    double randomY = randomWithinRange(0, MKMapRectWorld.size.height - randomHeight);
+        XCTAssertTrue([annotationSetBySearch1 isEqual:annotationSetBySearch2], @"");
+        XCTAssertTrue([annotationSetBySearch1 isEqual:annotationSet], @"");
+        XCTAssertTrue(annotationsBySearch1.count == annotationsCount, @"");
 
-    MKMapRect randomRect = MKMapRectMake(randomX, randomY, randomWidth, randomHeight);
+        // Create random rect
+        MKMapRect randomRect = MKMapRectRandom();
 
-    NSAssert(MKMapRectContainsRect(MKMapRectWorld, randomRect), nil);
+        NSAssert(MKMapRectContainsRect(MKMapRectWorld, randomRect), nil);
 
-    annotationsBySearch1 = [annotationTree1 annotationsInMapRect:randomRect];
-    annotationsBySearch2 = [annotationTree2 annotationsInMapRect:randomRect];
+        annotationsBySearch1 = [annotationTree1 annotationsInMapRect:randomRect];
+        annotationsBySearch2 = [annotationTree2 annotationsInMapRect:randomRect];
 
-    annotationSetBySearch1 = [NSSet setWithArray:annotationsBySearch1];
-    annotationSetBySearch2 = [NSSet setWithArray:annotationsBySearch2];
-
-    XCTAssertTrue([annotationSetBySearch1 isEqual:annotationSetBySearch2], @"");
+        annotationSetBySearch1 = [NSSet setWithArray:annotationsBySearch1];
+        annotationSetBySearch2 = [NSSet setWithArray:annotationsBySearch2];
+        
+        XCTAssertTrue([annotationSetBySearch1 isEqual:annotationSetBySearch2], @"");
+    }
 }
 
 @end
